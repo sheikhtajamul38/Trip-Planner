@@ -3,7 +3,7 @@ import { Stat, StatusBadge } from "@/components/display";
 import { requireAgency } from "@/lib/auth";
 import { DESTINATIONS } from "@/lib/destinations";
 import { budgetLabel, fmtDate, inr, inrShort } from "@/lib/format";
-import { expireStaleLeads } from "@/lib/marketplace";
+import { LEAD_RESPONSE_HOURS, QUOTE_DUE_HOURS, expireStaleLeads } from "@/lib/marketplace";
 import { agencyDashboard } from "@/lib/queries";
 
 export default async function AgencyDashboard() {
@@ -40,6 +40,7 @@ export default async function AgencyDashboard() {
                 Budget: {budgetLabel(l.budget_min, l.budget_max)} · Hotel: {l.hotel_category}
               </div>
               <div className="text-sm text-stone-600">{l.route.map((d) => DESTINATIONS[d]?.name ?? d).join(" + ")}</div>
+              <DueLabel status={l.status} createdAt={l.created_at} acceptedAt={l.accepted_at} />
               {l.revision_note && <p className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-800">↻ {l.revision_note}</p>}
               {l.latest_quote != null && <div className="text-sm">Your quote: <b>{inr(l.latest_quote)}</b></div>}
               <span className="inline-block text-sm font-semibold text-brand-700">
@@ -85,4 +86,17 @@ export default async function AgencyDashboard() {
       )}
     </div>
   );
+}
+
+function DueLabel({ status, createdAt, acceptedAt }: { status: string; createdAt: Date; acceptedAt: Date | null }) {
+  const due =
+    status === "NEW" ? new Date(createdAt).getTime() + LEAD_RESPONSE_HOURS * 3600_000
+    : status === "ACCEPTED" && acceptedAt ? new Date(acceptedAt).getTime() + QUOTE_DUE_HOURS * 3600_000
+    : null;
+  if (!due) return null;
+  const mins = Math.round((due - Date.now()) / 60_000);
+  const what = status === "NEW" ? "Respond" : "Send quote";
+  if (mins <= 0) return <p className="text-xs font-semibold text-red-700">{what} overdue — the platform may reassign this lead</p>;
+  const left = mins < 90 ? `${mins} min` : `${Math.round(mins / 60)} h`;
+  return <p className={`text-xs font-semibold ${mins < 30 ? "text-red-700" : "text-amber-700"}`}>{what} within {left}</p>;
 }

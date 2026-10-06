@@ -13,6 +13,10 @@ create table if not exists users (
   created_at timestamptz not null default now()
 );
 
+-- Bumped on password change; sessions carrying an older version are rejected.
+alter table users add column if not exists session_version integer not null default 1;
+create unique index if not exists users_admin_email on users (lower(email)) where role = 'platform_admin';
+
 create table if not exists agencies (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -193,3 +197,41 @@ create table if not exists events (
 create index if not exists events_entity on events (entity_type, entity_id);
 create index if not exists leads_agency_status on leads (agency_id, status);
 create index if not exists quotes_lead on quotes (lead_id);
+
+-- Fixed-window counters for rate limiting public endpoints and logins.
+create table if not exists rate_limits (
+  key text primary key,
+  window_start timestamptz not null,
+  count integer not null
+);
+
+-- Anonymous funnel steps that don't otherwise leave a row (visits, planner starts, quote views).
+create table if not exists analytics_events (
+  id bigserial primary key,
+  name text not null,
+  visitor_id text,
+  trip_id uuid,
+  created_at timestamptz not null default now()
+);
+create index if not exists analytics_events_name_time on analytics_events (name, created_at);
+
+-- Row Level Security. The app talks to Postgres from the server only, as the table owner,
+-- which bypasses RLS. Enabling RLS with no policies means Supabase's public REST/GraphQL API
+-- (anon and authenticated keys) can read or write nothing.
+do $$
+declare t text;
+begin
+  foreach t in array array[
+    'users', 'agencies', 'agency_users', 'trips', 'trip_messages', 'leads', 'quotes', 'bookings',
+    'payments', 'reviews', 'issues', 'credit_transactions', 'notifications', 'events', 'rate_limits',
+    'analytics_events'
+  ] loop
+    execute format('alter table %I enable row level security', t);
+    if exists (select 1 from pg_roles where rolname = 'anon') then
+      execute format('revoke all on table %I from anon', t);
+    end if;
+    if exists (select 1 from pg_roles where rolname = 'authenticated') then
+      execute format('revoke all on table %I from authenticated', t);
+    end if;
+  end loop;
+end $$;

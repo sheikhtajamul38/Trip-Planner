@@ -86,10 +86,11 @@ export function BudgetCard({ itinerary }: { itinerary: Itinerary }) {
   const e = itinerary.estimate;
   return (
     <div className="card">
-      <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">Estimated budget</div>
+      <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">Indicative trip estimate</div>
       <div className="mt-1 text-2xl font-bold">
         {inr(e.min)} – {inr(e.max)}
       </div>
+      <p className="mt-1 text-xs text-stone-500">Final price depends on dates, hotel availability and the operator&apos;s quote.</p>
       <details className="mt-2 text-sm">
         <summary className="cursor-pointer text-brand-700">How we estimated this</summary>
         <ul className="mt-2 space-y-1">

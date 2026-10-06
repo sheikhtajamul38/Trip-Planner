@@ -5,6 +5,7 @@ import { todayIST } from "./format";
 import { matchAgencies } from "./matching";
 import { notify } from "./notify";
 import { type TripRequirements, applyDestinationEdit, buildItinerary, tripDays } from "./planner";
+import { tripMagicPath } from "./tokens";
 import { type TripRow, WorkflowError } from "./types";
 
 export async function logEvent(q: Queryable, entityType: string, entityId: string, event: string, actor: string, data: object = {}) {
@@ -119,8 +120,9 @@ export async function editTrip(tripId: string, request: string): Promise<{ under
   const db = await getDb();
   return db.tx(async (q) => {
     await q.query(
-      `update trips set ai_itinerary = $2::jsonb, destinations = $3, excluded = $4, activity_level = $5, updated_at = now() where id = $1`,
-      [tripId, JSON.stringify(itinerary), req.mustInclude ?? [], req.exclude ?? [], req.activityLevel],
+      `update trips set ai_itinerary = $2::jsonb, destinations = $3, excluded = $4, activity_level = $5, hotel_category = $6, updated_at = now()
+        where id = $1`,
+      [tripId, JSON.stringify(itinerary), req.mustInclude ?? [], req.exclude ?? [], req.activityLevel, req.hotelCategory],
     );
     // Operators that already priced the old plan need to re-price the new one.
     const leads = await q.query<{ id: string; phone: string }>(
@@ -222,8 +224,28 @@ export async function requestQuotes(
       q,
       phone,
       `Thanks ${name}! We've sent your Kashmir trip to ${agencies.length || "our"} verified operator${agencies.length === 1 ? "" : "s"}. You'll get quotes here:`,
-      `/trip/${tripId}/quotes`,
+      tripMagicPath(tripId, "/quotes"),
     );
     return { matched: agencies.length };
   });
+}
+
+/**
+ * "Lost your link?" — queue fresh magic links to the WhatsApp number on file.
+ * The caller always gets the same response, so this can't be used to probe numbers.
+ */
+export async function recoverTripLinks(phoneRaw: string): Promise<void> {
+  const phone = normalisePhone(phoneRaw);
+  if (!phone) throw new WorkflowError("Please enter a valid WhatsApp number.");
+  const trips = await query<{ id: string; start_date: string }>(
+    `select t.id, t.start_date from trips t join users u on u.id = t.user_id
+      where u.phone = $1 and t.created_at > now() - interval '1 year' order by t.created_at desc limit 5`,
+    [phone],
+  );
+  if (!trips.length) return;
+  const base = process.env.APP_URL ?? "http://localhost:3000";
+  const lines = trips.map((t) => `Trip from ${t.start_date}: ${base}${tripMagicPath(t.id)}`);
+  const db = await getDb();
+  await notify(db, phone, `Here ${trips.length > 1 ? "are your Kashmir trip links" : "is your Kashmir trip link"}:\n${lines.join("\n")}`);
+  for (const t of trips) await logEvent(db, "trip", t.id, "access_link_requested", "tourist");
 }

@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { ActionState } from "@/app/actions";
-import { agencyLogin } from "@/lib/agencies";
+import { agencyLogin, changePassword } from "@/lib/accounts";
+import { LIMITS, limit, limitByIp } from "@/lib/ratelimit";
 import type { QuoteDetails } from "@/lib/ai";
 import { clearSession, requireAgency, setSession } from "@/lib/auth";
 import { acceptLead, declineLead, recordPayment, sendQuote } from "@/lib/marketplace";
@@ -21,8 +22,14 @@ async function attempt(fn: () => Promise<void | string>): Promise<ActionState> {
 }
 
 export async function loginAction(_: ActionState, form: FormData): Promise<ActionState> {
-  const res = await agencyLogin(String(form.get("phone") ?? ""), String(form.get("code") ?? ""));
-  if (!res) return { error: "Phone number or access code is incorrect." };
+  const phone = String(form.get("phone") ?? "");
+  const limited = await attempt(async () => {
+    await limitByIp("loginPerIp");
+    await limit(`login:agency:${phone.replace(/\D/g, "").slice(-10)}`, LIMITS.loginPerAccount.max, LIMITS.loginPerAccount.window);
+  });
+  if (limited?.error) return { ...limited, values: { phone } };
+  const res = await agencyLogin(phone, String(form.get("code") ?? ""));
+  if (!res) return { error: "Phone number or access code is incorrect.", values: { phone } };
   await setSession({ kind: "agency", ...res });
   redirect("/agency");
 }
@@ -81,5 +88,16 @@ export async function recordPaymentAction(bookingId: string, _: ActionState, for
     });
     revalidatePath(`/agency/bookings/${bookingId}`);
     return "Payment recorded — the platform will verify it.";
+  });
+}
+
+export async function changeCodeAction(_: ActionState, form: FormData): Promise<ActionState> {
+  const s = await requireAgency();
+  return attempt(async () => {
+    await limit(`changeCode:${s.userId}`, 5, 900);
+    if (String(form.get("next")) !== String(form.get("confirm"))) throw new WorkflowError("The new codes don't match.");
+    const v = await changePassword(s.userId, String(form.get("current") ?? ""), String(form.get("next") ?? ""));
+    await setSession({ ...s, v });
+    return "Access code changed. Other devices have been signed out.";
   });
 }

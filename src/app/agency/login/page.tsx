@@ -13,7 +13,7 @@ export default function AgencyLogin() {
       <form action={action} className="card space-y-3">
         <div className="flex flex-col gap-1">
           <label htmlFor="phone">Registered phone number</label>
-          <input id="phone" name="phone" type="tel" required autoComplete="tel" />
+          <input id="phone" name="phone" type="tel" required autoComplete="tel" defaultValue={state?.values?.phone} key={state?.values?.phone} />
         </div>
         <div className="flex flex-col gap-1">
           <label htmlFor="code">Access code</label>

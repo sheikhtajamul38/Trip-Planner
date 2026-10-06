@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { PrivateTrip } from "@/components/PrivateTrip";
+import { hasTripAccess } from "@/lib/auth";
 import { notFound } from "next/navigation";
 import { BudgetCard, ItineraryDays } from "@/components/display";
 import { aiAvailable } from "@/lib/ai";
@@ -9,6 +11,8 @@ export const dynamic = "force-dynamic";
 
 export default async function TripPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // Check access before loading, so a private trip and a missing one look the same.
+  if (!(await hasTripAccess(id))) return <PrivateTrip />;
   const trip = await getTrip(id);
   if (!trip) notFound();
   const messages = await getTripMessages(id);

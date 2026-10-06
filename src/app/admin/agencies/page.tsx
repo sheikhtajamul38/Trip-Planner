@@ -58,8 +58,8 @@ export default async function AgenciesPage({ searchParams }: { searchParams: Pro
               <input id="contactName" name="contactName" />
             </div>
             <div className="flex flex-col gap-1">
-              <label htmlFor="accessCode">Access code (share privately, min 6 chars)</label>
-              <input id="accessCode" name="accessCode" required minLength={6} />
+              <label htmlFor="accessCode">Initial access code (share privately, 10+ chars)</label>
+              <input id="accessCode" name="accessCode" required minLength={10} />
             </div>
           </div>
           <p className="text-xs text-stone-500">New agencies start as PENDING and receive no leads until you verify them.</p>

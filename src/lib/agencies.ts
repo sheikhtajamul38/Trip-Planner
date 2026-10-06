@@ -1,4 +1,5 @@
-import { hashPassword, verifyPassword } from "./passwords";
+import { validateNewPassword } from "./accounts";
+import { hashPassword } from "./passwords";
 import { getDb, one, query } from "./db";
 import { type DestinationId, isDestinationId } from "./destinations";
 import { logEvent, normalisePhone } from "./trips";
@@ -28,7 +29,7 @@ function cleanInput(input: AgencyInput) {
 /** Admin onboards an agency together with its first login. */
 export async function createAgency(input: AgencyInput, login: { name: string; accessCode: string }): Promise<string> {
   const a = cleanInput(input);
-  if (login.accessCode.length < 6) throw new WorkflowError("Access code must be at least 6 characters.");
+  validateNewPassword(login.accessCode);
   const db = await getDb();
   return db.tx(async (q) => {
     const [agency] = await q.query<{ id: string }>(
@@ -81,17 +82,4 @@ export async function getAgency(id: string) {
 
 export async function listAgencies() {
   return query<AgencyRow>(`select * from agencies order by created_at`);
-}
-
-export async function agencyLogin(phoneRaw: string, accessCode: string): Promise<{ agencyId: string; userId: string } | null> {
-  const phone = normalisePhone(phoneRaw);
-  if (!phone) return null;
-  const row = await one<{ user_id: string; agency_id: string; password_hash: string | null; active: boolean }>(
-    `select u.id as user_id, au.agency_id, u.password_hash, a.active
-       from users u join agency_users au on au.user_id = u.id join agencies a on a.id = au.agency_id
-      where u.phone = $1 order by au.role limit 1`,
-    [phone],
-  );
-  if (!row || !row.active || !verifyPassword(accessCode, row.password_hash)) return null;
-  return { agencyId: row.agency_id, userId: row.user_id };
 }

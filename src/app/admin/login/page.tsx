@@ -12,6 +12,10 @@ export default function AdminLogin() {
       <h1 className="text-2xl font-bold">Platform admin</h1>
       <form action={action} className="card space-y-3">
         <div className="flex flex-col gap-1">
+          <label htmlFor="email">Email</label>
+          <input id="email" name="email" type="email" required autoComplete="username" defaultValue={state?.values?.email} key={state?.values?.email} />
+        </div>
+        <div className="flex flex-col gap-1">
           <label htmlFor="password">Password</label>
           <input id="password" name="password" type="password" required autoComplete="current-password" />
         </div>

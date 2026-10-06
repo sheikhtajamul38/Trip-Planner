@@ -1,9 +1,11 @@
 import Link from "next/link";
+import { PrivateTrip } from "@/components/PrivateTrip";
+import { getSession, hasTripAccess } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
 import { VerifiedBadge } from "@/components/display";
 import { fmtDate, inr } from "@/lib/format";
 import { markQuotesViewed } from "@/lib/marketplace";
-import { getTripView } from "@/lib/queries";
+import { getTripView, recordQuotesViewed } from "@/lib/queries";
 import { SelectQuote } from "./SelectQuote";
 
 export const dynamic = "force-dynamic";
@@ -16,16 +18,21 @@ function responseLabel(minutes: number) {
 
 export default async function QuotesPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // Check access before loading, so a private trip and a missing one look the same.
+  if (!(await hasTripAccess(id))) return <PrivateTrip />;
   let view = await getTripView(id);
   if (!view) notFound();
   if (view.trip.status === "PLANNED") redirect(`/trip/${id}`);
   if (view.booking) redirect(`/trip/${id}/booking`);
-  if (view.quotes.some((q) => q.status === "SENT")) {
+  // Admins look at customer pages too; that must not count as the customer viewing quotes.
+  const isAdmin = (await getSession())?.kind === "admin";
+  if (!isAdmin && view.quotes.some((q) => q.status === "SENT")) {
     await markQuotesViewed(id);
     view = (await getTripView(id))!;
   }
 
   const { trip, quotes, leads, profiles } = view;
+  if (quotes.length && !isAdmin) await recordQuotesViewed(id);
   const waiting = leads.filter((l) => ["NEW", "ACCEPTED"].includes(l.status)).length;
 
   return (
@@ -83,6 +90,12 @@ export default async function QuotesPage({ params }: { params: Promise<{ id: str
                   <div>
                     <dt className="text-stone-500">Typical response</dt>
                     <dd className="font-semibold">{responseLabel(p.avgResponseMinutes)}</dd>
+                  </div>
+                )}
+                {p.quoteRate != null && (
+                  <div>
+                    <dt className="text-stone-500">Quotes on enquiries</dt>
+                    <dd className="font-semibold">{Math.round(p.quoteRate * 100)}%</dd>
                   </div>
                 )}
                 <div>

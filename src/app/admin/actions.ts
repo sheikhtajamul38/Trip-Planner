@@ -4,9 +4,11 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { ActionState } from "@/app/actions";
 import { type AgencyInput, createAgency, setAgencyActive, setVerification, updateAgency } from "@/lib/agencies";
-import { checkAdminPassword, clearSession, requireAdmin, setSession } from "@/lib/auth";
+import { adminLogin, resetAgencyCode } from "@/lib/accounts";
+import { clearSession, requireAdmin, setSession } from "@/lib/auth";
+import { LIMITS, limit, limitByIp } from "@/lib/ratelimit";
 import { query } from "@/lib/db";
-import { addCredits, assignLead, cancelBooking, completeTrip, recordPayment, setPaymentStatus } from "@/lib/marketplace";
+import { addCredits, assignLead, expireLead, cancelBooking, completeTrip, recordPayment, setPaymentStatus } from "@/lib/marketplace";
 import { logEvent } from "@/lib/trips";
 import { getDb } from "@/lib/db";
 import { type CommissionModel, WorkflowError } from "@/lib/types";
@@ -27,8 +29,17 @@ async function run(back: string, fn: () => Promise<unknown>) {
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 
 export async function adminLoginAction(_: ActionState, form: FormData): Promise<ActionState> {
-  if (!checkAdminPassword(str(form, "password"))) return { error: "Wrong password." };
-  await setSession({ kind: "admin" });
+  const email = str(form, "email").toLowerCase();
+  try {
+    await limitByIp("loginPerIp");
+    await limit(`login:admin:${email}`, LIMITS.loginPerAccount.max, LIMITS.loginPerAccount.window);
+  } catch (err) {
+    if (err instanceof WorkflowError) return { error: err.message, values: { email } };
+    throw err;
+  }
+  const res = await adminLogin(email, str(form, "password"));
+  if (!res) return { error: "Wrong email or password.", values: { email } };
+  await setSession({ kind: "admin", ...res });
   redirect("/admin");
 }
 
@@ -118,4 +129,12 @@ export async function forceCompleteAction(tripId: string) {
 
 export async function cancelBookingAction(bookingId: string, tripId: string, form: FormData) {
   await run(`/admin/trips/${tripId}`, () => cancelBooking(bookingId, str(form, "reason")));
+}
+
+export async function resetAgencyCodeAction(id: string, form: FormData) {
+  await run(`/admin/agencies/${id}`, () => resetAgencyCode(id, str(form, "code")));
+}
+
+export async function expireLeadAction(leadId: string) {
+  await run("/admin", () => expireLead(leadId, "missed response target"));
 }

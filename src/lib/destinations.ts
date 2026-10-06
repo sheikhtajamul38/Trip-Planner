@@ -2,7 +2,16 @@
  * Structured destination data the planner (and the AI) build itineraries from.
  * Costs are indicative INR figures used only for the budget *estimate*;
  * operators set real prices in their quotes.
+ *
+ * Update the rates below from the operator pricing survey (docs/pricing-survey.md),
+ * then update PRICING_META so the admin dashboard stops flagging them.
  */
+export const PRICING_META = {
+  /** "draft" until the rates have been checked against real operator prices. */
+  status: "draft" as "draft" | "validated",
+  reviewedOn: null as string | null,
+  source: "Developer estimates — not yet validated with Kashmir operators",
+};
 
 export const INTERESTS = ["mountains", "snow", "culture", "food", "relaxation", "adventure"] as const;
 export type Interest = (typeof INTERESTS)[number];
@@ -175,12 +184,26 @@ export function isDestinationId(v: string): v is DestinationId {
   return v in DESTINATIONS;
 }
 
-/** Find destination ids mentioned by name in free text. */
+/** Common spellings and typos travellers actually type. */
+export const DESTINATION_ALIASES: Record<DestinationId, string[]> = {
+  srinagar: ["srinagar", "sri nagar", "shrinagar", "srinager", "srinagr", "dal lake"],
+  gulmarg: ["gulmarg", "gulmrg", "gulmarag", "gulmaarg", "gulamarg"],
+  pahalgam: ["pahalgam", "pahalgaam", "pehalgam", "phalgam", "pahelgam"],
+  sonamarg: ["sonamarg", "sonmarg", "sonamarag", "sonamaarg", "sona marg"],
+  doodhpathri: ["doodhpathri", "dudhpathri", "doodhpatri", "dudhpatri", "doodh pathri"],
+  yusmarg: ["yusmarg", "yousmarg", "yusmarag", "yousmarag"],
+};
+
+/** Index of the first alias of `id` in `lower`, or -1. */
+export function aliasIndex(lower: string, id: DestinationId): number {
+  const hits = DESTINATION_ALIASES[id].map((a) => lower.indexOf(a)).filter((i) => i >= 0);
+  return hits.length ? Math.min(...hits) : -1;
+}
+
+/** Find destination ids mentioned in free text, in the order they appear. */
 export function findDestinationsInText(text: string): DestinationId[] {
   const lower = text.toLowerCase();
-  return DESTINATION_IDS.filter((id) => lower.includes(DESTINATIONS[id].name.toLowerCase())).sort(
-    (a, b) => lower.indexOf(DESTINATIONS[a].name.toLowerCase()) - lower.indexOf(DESTINATIONS[b].name.toLowerCase()),
-  );
+  return DESTINATION_IDS.filter((id) => aliasIndex(lower, id) >= 0).sort((a, b) => aliasIndex(lower, a) - aliasIndex(lower, b));
 }
 
 export const BUDGET_OPTIONS = [

@@ -5,6 +5,7 @@ import {
   type Interest,
   DESTINATIONS,
   DESTINATION_IDS,
+  HOTEL_CATEGORIES,
   MEALS_PER_PERSON_PER_DAY,
   VEHICLES,
 } from "./destinations";
@@ -318,14 +319,18 @@ export function formatRange(start: string, end: string): string {
 export function applyDestinationEdit(
   req: TripRequirements,
   current: Stay[],
-  edit: { add?: DestinationId[]; remove?: DestinationId[]; activityLevel?: ActivityLevel },
+  edit: { add?: DestinationId[]; remove?: DestinationId[]; activityLevel?: ActivityLevel; hotelChange?: "up" | "down" },
 ): TripRequirements {
+  const ladder = HOTEL_CATEGORIES;
+  const step = edit.hotelChange === "up" ? 1 : edit.hotelChange === "down" ? -1 : 0;
+  const hotelCategory = ladder[Math.min(Math.max(ladder.indexOf(req.hotelCategory) + step, 0), ladder.length - 1)];
   const remove = new Set(edit.remove ?? []);
   const keep = [...new Set(current.map((s) => s.destination))].filter((id) => id !== "srinagar" && !remove.has(id));
   const add = (edit.add ?? []).filter((id) => id !== "srinagar" && !keep.includes(id));
   return {
     ...req,
     activityLevel: edit.activityLevel ?? req.activityLevel,
+    hotelCategory,
     mustInclude: [...keep, ...add],
     exclude: [...new Set([...(req.exclude ?? []).filter((id) => !add.includes(id)), ...remove])],
     onlyThese: true,

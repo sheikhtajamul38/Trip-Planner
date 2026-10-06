@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Kashmir Trip Planner",
-  description: "Plan your Kashmir trip for free, then compare quotes from verified local operators.",
+  description: "The easiest way to plan and book a Kashmir trip. Plan with AI, compare verified local operators, book with confidence.",
 };
 
 export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#17726c" };

@@ -1,5 +1,8 @@
 // Creates three demo agencies so the full flow can be tried locally.
-// Usage: npm run db:seed   (logins: phone 9000000001/2/3, access code "demo1234")
+// Usage: npm run db:seed
+//   agencies: phone 9000000001/2/3, access code "demo-pass-1234"
+//   admin:    admin@example.com / "dev-admin-1234"
+import { createAdmin } from "../src/lib/accounts";
 import { createAgency, setVerification } from "../src/lib/agencies";
 import { one } from "../src/lib/db";
 import { addCredits } from "../src/lib/marketplace";
@@ -33,12 +36,14 @@ async function main() {
         commissionModel: a.model,
         commissionRate: 0,
       },
-      { name: a.name, accessCode: "demo1234" },
+      { name: a.name, accessCode: "demo-pass-1234" },
     );
     await setVerification(id, "VERIFIED", ["Demo — not a real business"]);
     if (a.model === "LEAD_FEE") await addCredits(id, 20, "demo credits");
-    console.log(`Created ${a.name} (login ${a.phone} / demo1234)`);
+    console.log(`Created ${a.name} (login ${a.phone} / demo-pass-1234)`);
   }
+  await createAdmin("admin@example.com", "Dev admin", "dev-admin-1234");
+  console.log("Dev admin: admin@example.com / dev-admin-1234");
   process.exit(0);
 }
 

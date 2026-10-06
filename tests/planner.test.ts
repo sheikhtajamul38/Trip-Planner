@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { heuristicEdit, heuristicExtract } from "@/lib/ai";
+import { heuristicEdit, heuristicExtract, hotelForBudget } from "@/lib/ai";
 import { type TripRequirements, applyDestinationEdit, buildItinerary, planStays, tripDays } from "@/lib/planner";
 import { scoreAgency } from "@/lib/matching";
 
@@ -83,6 +83,25 @@ describe("heuristic AI fallbacks", () => {
     expect(r.budgetMax).toBe(80000);
     expect(r.hotelCategory).toBe("4-star");
     expect(r.destinations).toEqual(["gulmarg", "pahalgam"]);
+  });
+
+  it("handles Hinglish, typos and tight budgets", async () => {
+    const r = heuristicExtract("hum 4 log hai, 5 din, bacche bhi hai, barf dekhni hai, gulmrg jana hai", "2026-10-06");
+    expect(r).toMatchObject({ travellers: 4, durationDays: 5, withKids: true, destinations: ["gulmarg"] });
+    expect(r.interests).toContain("snow");
+    expect(hotelForBudget({ budgetMax: 40000, travellers: 4, durationDays: 5 })).toBe("standard");
+    expect(heuristicEdit("pahalgam ki jagah sonmarg kar do")).toMatchObject({ add: ["sonamarg"], remove: ["pahalgam"] });
+    expect(heuristicEdit("I don't like this hotel").understood).toBe(false);
+    expect(heuristicEdit("Cancel my booking").understood).toBe(false);
+  });
+
+  it("makes a plan cheaper by stepping hotels down, deterministically", () => {
+    const edit = heuristicEdit("Make it cheaper");
+    expect(edit.hotelChange).toBe("down");
+    const cheaper = applyDestinationEdit(base, planStays(base), edit);
+    expect(cheaper.hotelCategory).toBe("standard");
+    expect(buildItinerary(cheaper).estimate.max).toBeLessThan(buildItinerary(base).estimate.max);
+    expect(applyDestinationEdit({ ...base, hotelCategory: "standard" }, planStays(base), edit).hotelCategory).toBe("standard");
   });
 
   it("understands replace requests", () => {

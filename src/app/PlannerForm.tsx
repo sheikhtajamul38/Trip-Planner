@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useState, useTransition } from "react";
+import { useActionState, useRef, useState, useTransition } from "react";
+import { track } from "@/components/Track";
 import { FormError, SubmitButton } from "@/components/ui";
 import { BUDGET_OPTIONS, DESTINATIONS, DESTINATION_IDS, type Interest } from "@/lib/destinations";
 import { type ActionState, createTripAction, extractAction } from "./actions";
@@ -39,6 +40,10 @@ export function PlannerForm({ today }: { today: string }) {
   function fillFromDescription() {
     startExtract(async () => {
       const r = await extractAction(description);
+      if (r.error) {
+        setQuestions([r.error]);
+        return;
+      }
       if (r.startDate) setStartDate(r.startDate);
       if (r.endDate) setEndDate(r.endDate);
       if (r.travellers) setTravellers(r.travellers);
@@ -53,10 +58,18 @@ export function PlannerForm({ today }: { today: string }) {
     });
   }
 
+  const started = useRef(false);
+  const markStarted = () => {
+    if (!started.current) {
+      started.current = true;
+      track("planner_started");
+    }
+  };
+
   const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" onFocusCapture={markStarted} onClickCapture={markStarted}>
       <div className="card space-y-3">
         <label htmlFor="describe" className="block text-base font-semibold text-stone-900">
           Tell us about your trip <span className="font-normal text-stone-500">(optional)</span>

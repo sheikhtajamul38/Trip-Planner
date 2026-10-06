@@ -5,7 +5,7 @@ import { getAgency } from "@/lib/agencies";
 import { requireAdmin } from "@/lib/auth";
 import { query } from "@/lib/db";
 import { fmtDateTime } from "@/lib/format";
-import { creditsAction, toggleActiveAction, updateAgencyAction, verificationAction } from "../../actions";
+import { creditsAction, resetAgencyCodeAction, toggleActiveAction, updateAgencyAction, verificationAction } from "../../actions";
 import { ErrorBanner } from "../../ErrorBanner";
 import { AgencyFields } from "../AgencyFields";
 
@@ -71,6 +71,15 @@ export default async function AgencyAdminPage({ params, searchParams }: { params
                 ))}
               </ul>
             )}
+          </form>
+
+          <form action={resetAgencyCodeAction.bind(null, id)} className="card space-y-2">
+            <h2 className="font-semibold">Reset access code</h2>
+            <p className="text-xs text-stone-500">Signs the agency out everywhere. Share the new code privately.</p>
+            <div className="flex gap-2">
+              <input name="code" required minLength={10} className="min-w-0 flex-1" placeholder="New code (10+ chars)" aria-label="New access code" />
+              <button className="btn-secondary">Reset</button>
+            </div>
           </form>
 
           <form action={toggleActiveAction.bind(null, id, !agency.active)} className="card">

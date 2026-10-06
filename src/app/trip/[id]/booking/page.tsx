@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { PrivateTrip } from "@/components/PrivateTrip";
+import { hasTripAccess } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
 import { StatusBadge, VerifiedBadge } from "@/components/display";
 import { DESTINATIONS } from "@/lib/destinations";
@@ -18,6 +20,8 @@ const STATUS_TEXT = {
 
 export default async function BookingPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // Check access before loading, so a private trip and a missing one look the same.
+  if (!(await hasTripAccess(id))) return <PrivateTrip />;
   const view = await getTripView(id);
   if (!view) notFound();
   const { trip, booking, payments, profiles, review, issues } = view;

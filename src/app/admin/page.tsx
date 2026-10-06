@@ -3,10 +3,13 @@ import { Stat, StatusBadge } from "@/components/display";
 import { listAgencies } from "@/lib/agencies";
 import { requireAdmin } from "@/lib/auth";
 import { budgetLabel, fmtDate, fmtDateTime, inr, inrShort, todayIST } from "@/lib/format";
-import { expireStaleLeads } from "@/lib/marketplace";
+import { query } from "@/lib/db";
+import { PRICING_META } from "@/lib/destinations";
+import { LEAD_RESPONSE_HOURS, QUOTE_DUE_HOURS, expireStaleLeads } from "@/lib/marketplace";
+import { pruneRateLimits } from "@/lib/ratelimit";
 import { whatsappLink } from "@/lib/notify";
-import { adminMetrics, adminQueues } from "@/lib/queries";
-import { assignLeadAction, notificationSentAction, paymentStatusAction, resolveIssueAction } from "./actions";
+import { adminMetrics, adminQueues, funnel as funnelSteps, overdueLeads } from "@/lib/queries";
+import { assignLeadAction, expireLeadAction, notificationSentAction, paymentStatusAction, resolveIssueAction } from "./actions";
 import { ErrorBanner } from "./ErrorBanner";
 
 export default async function AdminHome({ searchParams }: { searchParams: Promise<{ range?: string; error?: string }> }) {
@@ -14,28 +17,92 @@ export default async function AdminHome({ searchParams }: { searchParams: Promis
   const { range, error } = await searchParams;
   await expireStaleLeads();
   const since = range === "all" ? "1970-01-01" : todayIST().slice(0, 8) + "01";
-  const [{ funnel, agencies, destinations }, queues, allAgencies] = await Promise.all([adminMetrics(since), adminQueues(), listAgencies()]);
+  const [{ funnel, agencies, destinations }, queues, allAgencies, steps, overdue, [{ used: creditsUsed }]] = await Promise.all([
+    adminMetrics(since),
+    adminQueues(),
+    listAgencies(),
+    funnelSteps(since),
+    overdueLeads(LEAD_RESPONSE_HOURS, QUOTE_DUE_HOURS),
+    query<{ used: number }>(`select coalesce(-sum(delta), 0)::int as used from credit_transactions where delta < 0 and created_at >= $1`, [since]),
+    pruneRateLimits(),
+  ]);
   const assignable = allAgencies.filter((a) => a.active && a.verification_status === "VERIFIED");
   const rate = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : "—");
 
   return (
     <div className="space-y-8">
       <ErrorBanner error={error} />
+      {PRICING_META.status === "draft" && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          Budget estimates use draft pricing ({PRICING_META.source}). Collect real rates with <code>docs/pricing-survey.md</code> before launch.
+        </p>
+      )}
+
       <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-bold">{range === "all" ? "All time" : "This month"}</h1>
+          <h1 className="text-xl font-bold">Funnel · {range === "all" ? "all time" : "this month"}</h1>
           <Link href={range === "all" ? "/admin" : "/admin?range=all"} className="text-sm text-brand-700">
             {range === "all" ? "Show this month" : "Show all time"}
           </Link>
         </div>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
-          <Stat label="Trips planned" value={funnel.trips} />
-          <Stat label="Qualified leads" value={funnel.qualified} hint={`${rate(funnel.qualified, funnel.trips)} of trips`} />
-          <Stat label="Quotes" value={funnel.quotes} />
-          <Stat label="Bookings" value={funnel.bookings} hint={`${rate(funnel.bookings, funnel.qualified)} of leads`} />
-          <Stat label="Completed" value={funnel.completed} />
-          <Stat label="Booked value" value={inrShort(funnel.confirmed_value)} hint="confirmed + completed" />
+        <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
+          <div className="card overflow-x-auto p-0">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Step</th>
+                  <th className="text-right">Count</th>
+                  <th className="text-right">From previous</th>
+                  <th className="hidden sm:table-cell">Share of trips</th>
+                </tr>
+              </thead>
+              <tbody>
+                {steps.map((st, i) => {
+                  const prev = steps[i - 1]?.count;
+                  const trips = steps.find((x) => x.key === "trips")!.count;
+                  const share = i >= 2 && trips ? st.count / trips : null;
+                  return (
+                    <tr key={st.key}>
+                      <td>{st.label}</td>
+                      <td className="text-right font-semibold">{st.count}</td>
+                      <td className="text-right text-stone-500">{i === 0 ? "" : rate(st.count, prev)}</td>
+                      <td className="hidden sm:table-cell">
+                        {share != null && <div className="h-2 rounded bg-brand-500" style={{ width: `${Math.max(share * 100, 1)}%` }} />}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="space-y-3">
+            <Stat label="Booked value" value={inrShort(funnel.confirmed_value)} hint="confirmed + completed bookings" />
+            <Stat label="Lead credits used" value={creditsUsed} hint="accepted leads on paid plans" />
+          </div>
         </div>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-lg font-bold">Missed response targets ({overdue.length})</h2>
+        <p className="text-sm text-stone-500">
+          New leads unanswered after {LEAD_RESPONSE_HOURS}h, or accepted but unquoted after {QUOTE_DUE_HOURS}h. Pull the lead, then send the trip to another
+          operator from &ldquo;Needs matching&rdquo;.
+        </p>
+        {overdue.map((l) => (
+          <div key={l.id} className="card flex flex-wrap items-center justify-between gap-3 text-sm">
+            <div>
+              <b>{l.agency_name}</b> · <StatusBadge status={l.status} /> since {fmtDateTime(l.accepted_at ?? l.created_at)}
+              <div className="text-stone-500">
+                <Link className="text-brand-700" href={`/admin/trips/${l.trip_id}`}>
+                  {l.customer_name ?? "trip"}
+                </Link>
+              </div>
+            </div>
+            <form action={expireLeadAction.bind(null, l.id)}>
+              <button className="btn-secondary">Pull lead</button>
+            </form>
+          </div>
+        ))}
       </section>
 
       <section className="space-y-2">

@@ -27,16 +27,19 @@ export interface AgencyProfile {
   reviewCount: number;
   avgRating: number | null;
   avgResponseMinutes: number | null;
+  /** Share of leads received that got a quote. */
+  quoteRate: number | null;
 }
 
 export async function agencyProfiles(ids: string[]): Promise<Map<string, AgencyProfile>> {
   if (!ids.length) return new Map();
-  const rows = await query<AgencyRow & { completed: number; review_count: number; avg_rating: number | null; response_n: number; response_min: number | null }>(
+  const rows = await query<AgencyRow & { completed: number; review_count: number; avg_rating: number | null; response_n: number; response_min: number | null; leads_n: number }>(
     `select a.*,
        (select count(*) from bookings b where b.agency_id = a.id and b.status = 'COMPLETED')::int as completed,
        (select count(*) from reviews r where r.agency_id = a.id and r.verified_trip)::int as review_count,
        (select avg(r.rating)::float from reviews r where r.agency_id = a.id and r.verified_trip) as avg_rating,
        (select count(*) from leads l where l.agency_id = a.id and exists (select 1 from quotes q where q.lead_id = l.id))::int as response_n,
+       (select count(*) from leads l where l.agency_id = a.id and l.status <> 'NEW')::int as leads_n,
        (select avg(extract(epoch from (fq.first_quote - l.created_at)) / 60)::float
           from leads l join lateral (select min(q.created_at) as first_quote from quotes q where q.lead_id = l.id) fq on fq.first_quote is not null
          where l.agency_id = a.id) as response_min
@@ -57,6 +60,7 @@ export async function agencyProfiles(ids: string[]): Promise<Map<string, AgencyP
         reviewCount: a.review_count,
         avgRating: a.review_count >= MIN_SAMPLE ? a.avg_rating : null,
         avgResponseMinutes: a.response_n >= MIN_SAMPLE && a.response_min != null ? Math.round(a.response_min) : null,
+        quoteRate: a.leads_n >= MIN_SAMPLE * 3 ? a.response_n / a.leads_n : null,
       },
     ]),
   );
@@ -279,5 +283,76 @@ export async function tripEvents(tripId: string) {
               union select i.id from issues i where i.trip_id = $1))
       order by e.id`,
     [tripId],
+  );
+}
+
+// --------------------------------------------------------------------------- funnel
+
+export interface FunnelStep {
+  key: string;
+  label: string;
+  count: number;
+}
+
+/**
+ * The full funnel for a period. Visitor steps come from first-party beacons; every
+ * later step follows the cohort of trips created in the period through to review.
+ */
+export async function funnel(since: string): Promise<FunnelStep[]> {
+  const [r] = await query<Record<string, number>>(
+    `with cohort as (select * from trips where created_at >= $1)
+     select
+       (select count(distinct visitor_id) from analytics_events where name = 'visit' and created_at >= $1)::int as visitors,
+       (select count(distinct visitor_id) from analytics_events where name = 'planner_started' and created_at >= $1)::int as planner_started,
+       (select count(*) from cohort)::int as trips,
+       (select count(*) from cohort where user_id is not null)::int as quote_requests,
+       (select count(*) from cohort c where exists (select 1 from leads l where l.trip_id = c.id))::int as qualified,
+       (select count(*) from cohort c where exists (select 1 from leads l where l.trip_id = c.id and l.accepted_at is not null))::int as accepted,
+       (select count(*) from cohort c where exists (select 1 from quotes q join leads l on l.id = q.lead_id where l.trip_id = c.id))::int as quoted,
+       (select count(*) from cohort c where exists (select 1 from analytics_events a where a.name = 'quotes_viewed' and a.trip_id = c.id))::int as viewed,
+       (select count(*) from cohort c where exists (select 1 from bookings b where b.trip_id = c.id))::int as chose,
+       (select count(*) from cohort c where exists (select 1 from bookings b join payments p on p.booking_id = b.id
+          where b.trip_id = c.id and p.payment_type = 'DEPOSIT' and p.payment_status = 'VERIFIED'))::int as deposit,
+       (select count(*) from cohort c where exists (select 1 from bookings b where b.trip_id = c.id and b.confirmed_at is not null))::int as confirmed,
+       (select count(*) from cohort c where exists (select 1 from bookings b where b.trip_id = c.id and b.status = 'COMPLETED'))::int as completed,
+       (select count(*) from cohort c where exists (select 1 from bookings b join reviews rv on rv.booking_id = b.id where b.trip_id = c.id))::int as reviewed`,
+    [since],
+  );
+  const steps: [string, string][] = [
+    ["visitors", "Visitors"],
+    ["planner_started", "Started the planner"],
+    ["trips", "Trip generated"],
+    ["quote_requests", "Requested quotes"],
+    ["qualified", "Qualified lead (sent to operators)"],
+    ["accepted", "An operator accepted"],
+    ["quoted", "Quote received"],
+    ["viewed", "Customer viewed quotes"],
+    ["chose", "Chose an operator"],
+    ["deposit", "Deposit verified"],
+    ["confirmed", "Booking confirmed"],
+    ["completed", "Trip completed"],
+    ["reviewed", "Verified review"],
+  ];
+  return steps.map(([key, label]) => ({ key, label, count: r[key] }));
+}
+
+export async function recordQuotesViewed(tripId: string) {
+  await query(
+    `insert into analytics_events (name, trip_id) select 'quotes_viewed', $1
+      where not exists (select 1 from analytics_events where name = 'quotes_viewed' and trip_id = $1)`,
+    [tripId],
+  );
+}
+
+/** Leads past their response target: NEW beyond the first-response window, or ACCEPTED with no quote. */
+export async function overdueLeads(responseHours: number, quoteHours: number) {
+  return query<{ id: string; status: string; created_at: Date; accepted_at: Date | null; agency_name: string; trip_id: string; customer_name: string | null }>(
+    `select l.id, l.status, l.created_at, l.accepted_at, a.name as agency_name, l.trip_id, u.name as customer_name
+       from leads l join agencies a on a.id = l.agency_id join trips t on t.id = l.trip_id left join users u on u.id = t.user_id
+      where t.status = 'QUOTES_REQUESTED'
+        and ((l.status = 'NEW' and l.created_at < now() - make_interval(hours => $1))
+          or (l.status = 'ACCEPTED' and l.accepted_at < now() - make_interval(hours => $2)))
+      order by l.created_at`,
+    [responseHours, quoteHours],
   );
 }

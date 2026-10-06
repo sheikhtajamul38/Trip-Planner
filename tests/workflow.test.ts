@@ -14,6 +14,7 @@ import {
   setPaymentStatus,
   submitReview,
 } from "@/lib/marketplace";
+import { funnel } from "@/lib/queries";
 import { createTrip, editTrip, requestQuotes } from "@/lib/trips";
 import type { BookingRow, LeadRow, QuoteRow, TripRow } from "@/lib/types";
 
@@ -34,7 +35,7 @@ async function agency(name: string, phone: string, coverage: string[], model: "F
       commissionModel: model,
       commissionRate: 0,
     },
-    { name, accessCode: "secret123" },
+    { name, accessCode: "secret-123456" },
   );
   await setVerification(id, "VERIFIED", ["Phone verified"]);
   return id;
@@ -131,10 +132,16 @@ describe("trip → lead → quote → booking → payment → review", () => {
     [booking] = await query<BookingRow>(`select * from bookings where id = $1`, [bookingId]);
     expect(booking.status).toBe("CONFIRMED");
 
+    // Once booked, the AI-driven edit path is closed; only the operator can change the trip.
+    await expect(editTrip(tripId, "Replace Pahalgam with Gulmarg")).rejects.toThrow(/already booked/);
+
     await expect(completeTrip(tripId, "tourist")).rejects.toThrow(/once your trip has ended/);
     await completeTrip(tripId, "admin", { force: true });
     await submitReview(tripId, 5, "Wonderful");
     await expect(submitReview(tripId, 4, "again")).rejects.toThrow(/already reviewed/);
+
+    const steps = Object.fromEntries((await funnel("1970-01-01")).map((st) => [st.key, st.count]));
+    expect(steps).toMatchObject({ trips: 1, quote_requests: 1, qualified: 1, accepted: 1, quoted: 1, chose: 1, deposit: 1, confirmed: 1, completed: 1, reviewed: 1 });
 
     const events = await query<{ event: string }>(`select event from events order by id`);
     expect(events.map((e) => e.event)).toEqual(

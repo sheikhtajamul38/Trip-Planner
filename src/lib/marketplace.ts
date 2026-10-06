@@ -3,6 +3,7 @@ import { type Queryable, getDb } from "./db";
 import { inr, todayIST } from "./format";
 import { notify } from "./notify";
 import { addDays } from "./planner";
+import { tripMagicPath } from "./tokens";
 import { logEvent } from "./trips";
 import {
   type AgencyRow,
@@ -26,6 +27,10 @@ import {
  */
 
 export const DEPOSIT_AMOUNT = Number(process.env.DEPOSIT_AMOUNT ?? 5000);
+/** Agencies should accept or decline a new lead within this many hours. */
+export const LEAD_RESPONSE_HOURS = Number(process.env.LEAD_RESPONSE_HOURS ?? 2);
+/** …and send a quote within this many hours of accepting. */
+export const QUOTE_DUE_HOURS = Number(process.env.QUOTE_DUE_HOURS ?? 24);
 
 async function tx<T>(fn: (q: Queryable) => Promise<T>) {
   return (await getDb()).tx(fn);
@@ -124,7 +129,7 @@ export async function sendQuote(leadId: string, agencyId: string, rawDetails: Qu
     );
     await q.query(`update leads set status = 'QUOTE_SENT', revision_note = null where id = $1`, [leadId]);
     await logEvent(q, "quote", quote.id, "sent", `agency:${agencyId}`, { leadId, amount });
-    await notify(q, trip.phone, `${ctx.name} sent a quote of ${inr(amount)} for your Kashmir trip.`, `/trip/${trip.id}/quotes`);
+    await notify(q, trip.phone, `${ctx.name} sent a quote of ${inr(amount)} for your Kashmir trip.`, tripMagicPath(trip.id, "/quotes"));
     return quote.id;
   });
 }
@@ -246,7 +251,7 @@ async function confirmIfPaid(q: Queryable, booking: BookingRow) {
     `select u.phone as customer, a.phone as agency from trips t left join users u on u.id = t.user_id join agencies a on a.id = $2 where t.id = $1`,
     [booking.trip_id, booking.agency_id],
   );
-  await notify(q, ctx?.customer, "Your Kashmir booking is confirmed ✓", `/trip/${booking.trip_id}/booking`);
+  await notify(q, ctx?.customer, "Your Kashmir booking is confirmed ✓", tripMagicPath(booking.trip_id, "/booking"));
   await notify(q, ctx?.agency, "Deposit verified — booking confirmed.", `/agency/bookings/${booking.id}`);
 }
 
@@ -310,6 +315,16 @@ export async function assignLead(tripId: string, agencyId: string) {
     await logEvent(q, "lead", lead.id, "created", "admin", { agencyId, manual: true });
     const [agency] = await q.query<{ phone: string }>(`select phone from agencies where id = $1`, [agencyId]);
     await notify(q, agency?.phone, `New Kashmir enquiry: ${trip.travellers} travellers, ${trip.start_date} to ${trip.end_date}.`, `/agency/leads/${lead.id}`);
+  });
+}
+
+/** Admin pulls a lead from a slow agency so the trip can be reassigned. No credit is refunded automatically. */
+export async function expireLead(leadId: string, reason: string) {
+  return tx(async (q) => {
+    const lead = await lockLead(q, leadId, null);
+    if (!["NEW", "ACCEPTED"].includes(lead.status)) throw new WorkflowError("Only unanswered or unquoted leads can be pulled.");
+    await q.query(`update leads set status = 'EXPIRED' where id = $1`, [leadId]);
+    await logEvent(q, "lead", leadId, "expired", "admin", { reason, wasAccepted: lead.status === "ACCEPTED" });
   });
 }
 

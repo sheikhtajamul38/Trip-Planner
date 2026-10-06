@@ -20,6 +20,9 @@ export default async function AgencyLayout({ children }: { children: React.React
             <Link href="/agency/bookings" className="text-sm text-brand-100 hover:text-white">
               Bookings
             </Link>
+            <Link href="/agency/settings" className="text-sm text-brand-100 hover:text-white">
+              Settings
+            </Link>
           </div>
           <div className="flex items-center gap-3 text-sm text-brand-100">
             {agency.commission_model === "LEAD_FEE" && <span>{agency.lead_credits} lead credits</span>}

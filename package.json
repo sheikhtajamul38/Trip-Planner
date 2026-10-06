@@ -9,7 +9,9 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "db:migrate": "tsx scripts/migrate.ts",
-    "db:seed": "tsx scripts/seed.ts"
+    "db:seed": "tsx scripts/seed.ts",
+    "admin:create": "tsx scripts/create-admin.ts",
+    "ai:eval": "tsx scripts/ai-eval.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",
